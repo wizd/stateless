@@ -142,6 +142,8 @@ namespace Stateless
         /// </summary>
         public StateMachineInfo GetInfo()
         {
+            var initialState = StateInfo.CreateStateInfo(new StateRepresentation(State));
+
             var representations = _stateConfiguration.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
 
             var behaviours = _stateConfiguration.SelectMany(kvp => kvp.Value.TriggerBehaviours.SelectMany(b => b.Value.OfType<TransitioningTriggerBehaviour>().Select(tb => tb.Destination))).ToList();
@@ -161,7 +163,7 @@ namespace Stateless
             foreach (var state in info)
                 StateInfo.AddRelationships(state.Value, representations[state.Key], k => info[k]);
 
-            return new StateMachineInfo(info.Values, typeof(TState), typeof(TTrigger));
+            return new StateMachineInfo(info.Values, typeof(TState), typeof(TTrigger), initialState);
         }
 
         StateRepresentation GetRepresentation(TState state)
@@ -308,10 +310,12 @@ namespace Stateless
         /// <param name="args">     A variable-length parameters list containing arguments. </param>
         private void InternalFireQueued(TTrigger trigger, params object[] args)
         {
+            // Add trigger to queue
+            _eventQueue.Enqueue(new QueuedTrigger { Trigger = trigger, Args = args });
+
             // If a trigger is already being handled then the trigger will be queued (FIFO) and processed later.
             if (_firing)
             {
-                _eventQueue.Enqueue(new QueuedTrigger { Trigger = trigger, Args = args });
                 return;
             }
 
@@ -319,10 +323,8 @@ namespace Stateless
             {
                 _firing = true;
 
-                InternalFireOne(trigger, args);
-                
-                // Check if any other triggers have been queued, and fire those as well.
-                while (_eventQueue.Count != 0)
+                // Empty queue for triggers
+                while (_eventQueue.Any())
                 {
                     var queuedEvent = _eventQueue.Dequeue();
                     InternalFireOne(queuedEvent.Trigger, queuedEvent.Args);
@@ -437,7 +439,7 @@ namespace Stateless
             // Enter the new state
             representation.Enter(transition, args);
 
-            if (_firingMode.Equals(FiringMode.Immediate) && !State.Equals(transition.Destination))
+            if (FiringMode.Immediate.Equals(_firingMode) && !State.Equals(transition.Destination))
             {
                 // This can happen if triggers are fired in OnEntry
                 // Must update current representation with updated State
